@@ -1,0 +1,301 @@
+name: Linux
+
+on:
+  push:
+    branches:
+      - master
+      - ci/*
+      - dev/*
+    paths:
+      - '.github/workflows/linux.yml'
+      - 'include/**'
+      - 'test/**'
+      - '**/CMakeLists.txt'
+  pull_request:
+    branches:
+      - master
+      - ci/*
+      - dev/*
+    paths:
+      - '.github/workflows/linux.yml'
+      - 'include/**'
+      - 'test/**'
+      - '**/CMakeLists.txt'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.ref_type == 'branch' && github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}-${{ github.event.schedule }}
+  cancel-in-progress: true
+
+env:
+  APT_INSTALL: |
+    sudo apt-get install
+      -yq --no-install-suggests --no-install-recommends
+      --allow-unauthenticated --allow-downgrades --allow-change-held-packages
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  # All pre-installed gcc and clang versions on native ubuntu 24.04 and 26.04,
+  # and the newest of each with the newest language standards
+  ubuntu:
+    runs-on: ubuntu-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: 24.04, cxx: g++-12, std: 17, type: Debug }
+          - { os: 24.04, cxx: g++-13, std: 17, type: Debug }
+          - { os: 24.04, cxx: g++-14, std: 17, type: Debug }
+          - { os: 24.04, cxx: clang++-16, std: 17, type: Debug }
+          - { os: 24.04, cxx: clang++-17, std: 17, type: Debug }
+          - { os: 24.04, cxx: clang++-18, std: 17, type: Debug }
+
+          - { os: 26.04, cxx: g++-13, std: 17, type: Debug }
+          - { os: 26.04, cxx: g++-14, std: 17, type: Debug }
+          - { os: 26.04, cxx: g++-15, std: 17, type: Debug }
+          - { os: 26.04, cxx: clang++-20, std: 17, type: Debug }
+          - { os: 26.04, cxx: clang++-21, std: 17, type: Debug }
+          - { os: 26.04, cxx: clang++-22, std: 17, type: Debug }
+
+          # Newest compilers: newest standards, and optimized builds
+          - { os: 26.04, cxx: g++-15, std: 23, type: Debug }
+          - { os: 26.04, cxx: g++-15, std: 26, type: Debug }
+          - { os: 26.04, cxx: g++-15, std: 17, type: Release }
+          - { os: 26.04, cxx: clang++-22, std: 23, type: Debug }
+          - { os: 26.04, cxx: clang++-22, std: 26, type: Debug }
+          - { os: 26.04, cxx: clang++-22, std: 17, type: Release }
+
+    env:
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_BUILD_TYPE=${{ matrix.type }} \
+                -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+
+      - name: Build
+        run: cmake --build build --verbose -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  # Oldest compilers we can get, through Docker.
+  # These images have no working `apt` (Debian Stretch/9 and Buster/10 are past EOL),
+  # so we bring our own cmake (the oldest one we claim to support) and ninja.
+  docker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cxx: g++-7
+            std: 17
+            image: gcc:7
+          - cxx: clang++-8
+            std: 17
+            image: eliaskosunen/old-clang:8
+
+    container:
+      image: ${{ matrix.image }}
+      env:
+        DEBIAN_FRONTEND: ${{ env.DEBIAN_FRONTEND }}
+        # gcc images only have "g++", no "g++-N"
+        CXX: ${{ startsWith(matrix.cxx, 'g++') && 'g++' || matrix.cxx }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install cmake 3.16
+        run: |
+          mkdir -p /tmp/deps
+          cd /tmp/deps
+          curl -s -L https://github.com/Kitware/CMake/releases/download/v3.16.9/cmake-3.16.9-Linux-x86_64.tar.gz \
+            | tar xz -C .
+          cp -r cmake-3.16.9-Linux-x86_64/bin/. /usr/local/bin
+          cp -r cmake-3.16.9-Linux-x86_64/share/. /usr/local/share
+          hash -r
+          cmake --version
+
+      # clang images already come with ninja (they are custom-built)
+      - name: Install ninja
+        if: startsWith(matrix.cxx, 'g++')
+        run: |
+          cd /tmp/deps
+          curl -s -L https://github.com/ninja-build/ninja/archive/refs/tags/v1.13.1.tar.gz \
+            | tar xz -C .
+          cd ninja-1.13.1
+          ./configure.py --bootstrap
+          cp ./ninja /usr/local/bin
+          ninja --version
+
+      - name: Run CMake
+        run: |
+          export PATH=/usr/local/bin:$PATH
+          cmake -S . -B build -G Ninja \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+
+      - name: Build
+        run: |
+          export PATH=/usr/local/bin:$PATH
+          cmake --build build --verbose -- -k 0
+
+      - name: Test
+        run: |
+          export PATH=/usr/local/bin:$PATH
+          cd build
+          ctest --output-on-failure
+
+  libcxx:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        std: [ 17, 23 ]
+
+    env:
+      CC: clang-18
+      CXX: clang++-18
+
+    steps:
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # libc++ we get through apt on 24.04 is v18
+      - name: Install libc++
+        run: |
+          sudo apt-get --allow-unauthenticated -yq update
+          ${APT_INSTALL} libc++-dev libc++abi-dev
+
+      - name: Run CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_STANDARD=${{ matrix.std }} \
+                -DCMAKE_CXX_FLAGS="-stdlib=libc++" \
+                -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++abi"
+
+      - name: Build
+        run: cmake --build build --verbose -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cc: clang-22, cxx: clang++-22 }
+          - { cc: gcc-15, cxx: g++-15 }
+
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_STANDARD=17 \
+                -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
+                -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build --verbose -- -k 0
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: print_stacktrace=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure
+
+  special-flags:
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: full-ieee754
+            cxx: g++-15
+            cxx_flags: "-frounding-math -fsignaling-nans"
+
+    env:
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CXX_STANDARD=17 \
+                -DCMAKE_CXX_FLAGS="${{ matrix.cxx_flags }}"
+
+      - name: Build
+        run: cmake --build build --verbose -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  alpine:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [ 3.14, latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Start docker
+        run: |
+          docker run -w /src -dit --name alpine -v "$PWD":/src alpine:${{ matrix.version }}
+          echo 'docker exec alpine "$@";' > alpine-run.sh
+          chmod +x alpine-run.sh
+
+      - name: Install dependencies
+        run: |
+          ./alpine-run.sh apk update
+          ./alpine-run.sh apk add build-base cmake g++ linux-headers git ninja
+
+      - name: Run CMake
+        run: |
+          ./alpine-run.sh cmake -S . -B build -G Ninja -DEKNAN_WERROR=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: ./alpine-run.sh cmake --build build --verbose -- -k 0
+
+      - name: Test
+        run: ./alpine-run.sh ctest --test-dir build --output-on-failure

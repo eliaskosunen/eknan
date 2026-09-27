@@ -1,0 +1,93 @@
+name: macOS
+
+on:
+  push:
+    branches:
+      - master
+      - ci/*
+      - dev/*
+    paths:
+      - '.github/workflows/macos.yml'
+      - 'include/**'
+      - 'test/**'
+      - '**/CMakeLists.txt'
+  pull_request:
+    branches:
+      - master
+      - ci/*
+      - dev/*
+    paths:
+      - '.github/workflows/macos.yml'
+      - 'include/**'
+      - 'test/**'
+      - '**/CMakeLists.txt'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.ref_type == 'branch' && github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}-${{ github.event.schedule }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple clang, on arm64 (26, 15) and intel (26-intel, 15-intel) macs.
+          # arm64 has a 64-bit `long double`, intel has x87.
+          - { os: 26, cxx: clang++, std: 17, type: Debug }
+          - { os: 15, cxx: clang++, std: 17, type: Debug }
+          - { os: 26-intel, cxx: clang++, std: 17, type: Debug }
+          - { os: 15-intel, cxx: clang++, std: 17, type: Debug }
+
+          # Newest Apple clang with newer standards and optimizations
+          - { os: 26, cxx: clang++, std: 23, type: Debug }
+          - { os: 26, cxx: clang++, std: 17, type: Release }
+          - { os: 26-intel, cxx: clang++, std: 17, type: Release }
+
+          # Homebrew (upstream) clang, with its own libc++
+          - { os: 26, cxx: brew-clang++, std: 17, type: Debug }
+          - { os: 26, cxx: brew-clang++, std: 23, type: Debug }
+          - { os: 26, cxx: brew-clang++, std: 17, type: Release }
+          - { os: 26-intel, cxx: brew-clang++, std: 17, type: Debug }
+
+          # gcc, on arm64.
+          # Release, to work around a GCC bug on macOS.
+          - { os: 26, cxx: g++-15, std: 17, type: RelWithDebInfo }
+          - { os: 26, cxx: g++-15, std: 23, type: RelWithDebInfo }
+          - { os: 15, cxx: g++-15, std: 17, type: RelWithDebInfo }
+
+    env:
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Homebrew clang
+        if: ${{ matrix.cxx == 'brew-clang++' }}
+        run: |
+          llvm_root="$(brew --prefix llvm)"
+          {
+            echo "CXX=clang++"
+            echo "LDFLAGS=-Wl,-rpath,${llvm_root}/lib/c++ -L${llvm_root}/lib/c++"
+            echo "CXXFLAGS=-isystem ${llvm_root}/include/c++/v1"
+          } >> "$GITHUB_ENV"
+          echo "${llvm_root}/bin" >> "$GITHUB_PATH"
+
+      - name: Run CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_BUILD_TYPE=${{ matrix.type }} \
+                -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+
+      - name: Build
+        run: cmake --build build --verbose -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

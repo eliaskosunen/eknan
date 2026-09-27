@@ -1,0 +1,129 @@
+name: Windows
+
+on:
+  push:
+    branches:
+      - master
+      - ci/*
+      - dev/*
+    paths:
+      - '.github/workflows/windows.yml'
+      - 'include/**'
+      - 'test/**'
+      - '**/CMakeLists.txt'
+  pull_request:
+    branches:
+      - master
+      - ci/*
+      - dev/*
+    paths:
+      - '.github/workflows/windows.yml'
+      - 'include/**'
+      - 'test/**'
+      - '**/CMakeLists.txt'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.ref_type == 'branch' && github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}-${{ github.event.schedule }}
+  cancel-in-progress: true
+
+jobs:
+  msvc:
+    runs-on: windows-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # VS2019 images were deleted in June 2025
+          - { os: 2022, platform: x64, std: 17, type: Debug }
+          - { os: 2025, platform: x64, std: 17, type: Debug }
+
+          # Newest standard, and optimized builds (/fp:fast interacts with the optimizer)
+          - { os: 2025, platform: x64, std: 23, type: Debug }
+          - { os: 2025, platform: x64, std: 17, type: Release }
+
+          # 32-bit: no __int128 (and no SSE2 guarantees on real hardware)
+          - { os: 2025, platform: Win32, std: 17, type: Debug }
+          - { os: 2022, platform: Win32, std: 17, type: Release }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run CMake
+        shell: bash
+        run: |
+          cmake -S . -B build -A ${{ matrix.platform }} \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.type }} --parallel --verbose
+
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.type }} --output-on-failure
+
+  clang-cl:
+    runs-on: windows-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: 2022, std: 17, type: Debug }
+          - { os: 2025, std: 17, type: Debug }
+          - { os: 2025, std: 23, type: Debug }
+          - { os: 2025, std: 17, type: Release }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run CMake
+        shell: bash
+        run: |
+          cmake -S . -B build -T ClangCL -A x64 \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.type }} --parallel --verbose
+
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.type }} --output-on-failure
+
+  msys:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        sys:
+          # gcc, ucrt, libstdc++ (MSYS recommended default)
+          - ucrt64
+          # gcc, msvcrt, libstdc++, 32-bit (x87 registers, 12-byte long double)
+          - mingw32
+          # llvm, ucrt, libc++
+          - clang64
+
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: ${{ matrix.sys }}
+          install: >-
+            git
+          pacboy: >-
+            toolchain:p
+            cmake:p
+            ninja:p
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja -DEKNAN_WERROR=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build --parallel --verbose -- -k 0
+          ctest --test-dir build --output-on-failure

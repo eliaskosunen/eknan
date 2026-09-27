@@ -1,0 +1,170 @@
+name: Other architectures
+
+on:
+  push:
+    branches:
+      - master
+      - ci/*
+      - dev/*
+    paths:
+      - '.github/workflows/arch.yml'
+      - 'include/**'
+      - 'test/**'
+      - '**/CMakeLists.txt'
+  pull_request:
+    branches:
+      - master
+      - ci/*
+      - dev/*
+    paths:
+      - '.github/workflows/arch.yml'
+      - 'include/**'
+      - 'test/**'
+      - '**/CMakeLists.txt'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.ref_type == 'branch' && github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}-${{ github.event.schedule }}
+  cancel-in-progress: true
+
+jobs:
+  # Cross-compile on x64 host, then run tests on target architectures through QEMU
+  cross-compile:
+    # MIPS targets are only available on 24.04
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Little-endian, IEEE 754-2008 NaNs
+          - { target: sh4, type: Debug }
+          - { target: i686, type: Debug }
+          - { target: i686, type: Release }
+          - { target: armv5, type: Debug }
+          - { target: armv7, type: Debug }
+          - { target: aarch64, type: Debug }
+          - { target: ppc64le, type: Debug }
+          # IEEE binary128 long double, which makes __float128 the same type
+          - { target: ppc64le, type: Debug, flags: -mabi=ieeelongdouble -Wno-psabi }
+          - { target: riscv64, type: Debug }
+          - { target: riscv64, type: Release }
+          - { target: loongarch64, type: Debug }
+          - { target: mips64r6el, type: Debug }
+
+          # Big-endian, IEEE 754-2008 NaNs
+          - { target: powerpc, type: Debug }
+          - { target: ppc64, type: Debug }
+          - { target: s390x, type: Debug }
+          - { target: sparc64, type: Debug }
+          - { target: m68k, type: Debug }
+
+          # Legacy NaN encodings (quiet bit inverted)
+          - { target: hppa, type: Debug }
+          - { target: mips, type: Debug }
+          - { target: mips64el, type: Debug }
+          - { target: mips64el, type: Release }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq ninja-build
+
+      - name: Set up cross-compilation environment
+        uses: eliaskosunen/cross-compile-action@master
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Cross-compile
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_BUILD_TYPE=${{ matrix.type }} \
+                -DCMAKE_CXX_STANDARD=17 \
+                "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
+          cmake --build build --verbose -- -k 0
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+  # Build and run tests natively on arm64
+  native-arm-linux:
+    runs-on: ubuntu-26.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        # Clang has _Float16 and __bf16 on arm64, but not __float128.
+        # Clang isn't necessarily preinstalled on the arm64 image, so the
+        # distribution's default version is installed.
+        cxx: [ g++-15, clang++ ]
+        std: [ 17 ]
+
+    env:
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Clang
+        if: matrix.cxx == 'clang++'
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq clang
+
+      - name: Run CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DEKNAN_WERROR=ON \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+
+      - name: Build
+        run: cmake --build build --verbose -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  native-arm-windows:
+    runs-on: windows-11-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        type: [ Debug, Release ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run CMake
+        shell: bash
+        run: |
+          cmake -S . -B build -DEKNAN_WERROR=ON -DCMAKE_CXX_STANDARD=17
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.type }} --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.type }} --output-on-failure
+
+  # Cross-compile with Visual Studio, targeting arm64. Doesn't run tests
+  cross-compile-msvc-arm64:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run CMake
+        shell: bash
+        run: |
+          cmake -S . -B build -A ARM64 -DCMAKE_CROSSCOMPILING=ON \
+                -DEKNAN_WERROR=ON -DCMAKE_CXX_STANDARD=17
+
+      - name: Build
+        run: cmake --build build --config Debug --parallel --verbose
