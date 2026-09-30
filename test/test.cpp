@@ -214,6 +214,13 @@ void make_default_nan(T& out, bool quiet)
     }
 }
 
+template <typename T>
+payload_t<T> default_payload(bool quiet)
+{
+    return quiet ? eknan::get_default_qnan_payload<T>()
+                 : eknan::get_default_snan_payload<T>();
+}
+
 template <typename T, typename Payload>
 bool can_make_nan(bool quiet, const Payload& payload)
 {
@@ -291,8 +298,54 @@ TYPED_TEST(MakeNanTest, Default)
     for (const bool quiet : {true, false}) {
         SCOPED_TRACE(quietness_name(quiet));
         TypeParam value;
+        std::memset(&value, 0xff, sizeof(TypeParam));
         make_default_nan(value, quiet);
-        expect_nan_kind(value, quiet);
+        expect_nan(value, quiet, default_payload<TypeParam>(quiet));
+        EXPECT_FALSE(eknan::get_signbit(value));
+        EXPECT_EQ(eknan::get_padding(value), 0u);
+
+        TypeParam expected;
+        ASSERT_TRUE(
+            make_nan_of(expected, quiet, default_payload<TypeParam>(quiet)));
+        EXPECT_TRUE(same_bits(value, expected));
+    }
+}
+
+TYPED_TEST(MakeNanTest, DefaultPayload)
+{
+    using I = payload_t<TypeParam>;
+    const auto top_bit =
+        static_cast<I>(I{1} << (eknan::get_payload_bit_count<TypeParam>() - 1));
+    if constexpr (legacy_nan_encoding) {
+        EXPECT_TRUE(eknan::get_default_qnan_payload<TypeParam>() == top_bit);
+        EXPECT_TRUE(eknan::get_default_snan_payload<TypeParam>() == I{0});
+    }
+    else {
+        EXPECT_TRUE(eknan::get_default_qnan_payload<TypeParam>() == I{0});
+        EXPECT_TRUE(eknan::get_default_snan_payload<TypeParam>() == top_bit);
+    }
+}
+
+// Not guaranteed by the API, but documented: the defaults are chosen to have
+// the same bits as the standard library's NaNs on common platforms
+TYPED_TEST(MakeNanTest, DefaultMatchesPlatformOnIeee2008)
+{
+#if defined(__m68k__)
+    GTEST_SKIP() << "GCC's default NaNs have every payload bit set on m68k";
+#endif
+    if constexpr (legacy_nan_encoding) {
+        GTEST_SKIP() << "The default NaNs vary by compiler on legacy encodings";
+    }
+    for (const bool quiet : {true, false}) {
+#ifdef _MSVC_STL_VERSION
+        // The MSVC STL's signaling NaNs are __builtin_nans("1")
+        if (!quiet && std::numeric_limits<TypeParam>::has_signaling_NaN) {
+            continue;
+        }
+#endif
+        SCOPED_TRACE(quietness_name(quiet));
+        TypeParam value;
+        make_default_nan(value, quiet);
 
         TypeParam expected;
         make_stdlib_nan(expected, quiet);
@@ -300,25 +353,18 @@ TYPED_TEST(MakeNanTest, Default)
     }
 }
 
-TYPED_TEST(MakeNanTest, DefaultPayloadMatchesPlatform)
+TEST(DefaultPayloadTest, KnownValues)
 {
-    for (const bool quiet : {true, false}) {
-#ifdef _MSVC_STL_VERSION
-        // The MSVC STL's signaling NaNs are __builtin_nans("1"), and
-        // default_payload models __builtin_nans("")
-        if (!quiet && eknan::detail::has_limits_nans<TypeParam>) {
-            continue;
-        }
-#endif
-        SCOPED_TRACE(quietness_name(quiet));
-        TypeParam value;
-        ASSERT_TRUE(make_nan_of(
-            value, quiet, eknan::detail::default_payload<TypeParam>(quiet)));
-
-        TypeParam expected;
-        make_stdlib_nan(expected, quiet);
-        expect_same_bits_ignoring_padding(value, expected);
-    }
+    constexpr bool legacy = legacy_nan_encoding;
+    static_assert(eknan::get_default_qnan_payload<float>() ==
+                  (legacy ? 0x200000u : 0u));
+    static_assert(eknan::get_default_snan_payload<float>() ==
+                  (legacy ? 0u : 0x200000u));
+    static_assert(eknan::get_default_qnan_payload<double>() ==
+                  (legacy ? std::uint64_t{1} << 50 : 0u));
+    static_assert(eknan::get_default_snan_payload<double>() ==
+                  (legacy ? 0u : std::uint64_t{1} << 50));
+    SUCCEED();
 }
 
 TYPED_TEST(MakeNanTest, WithPayload)

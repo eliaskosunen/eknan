@@ -121,12 +121,6 @@
 #define EKNAN_HPPA 0
 #endif
 
-#if defined(__m68k__) || defined(__mc68000__)
-#define EKNAN_M68K 1
-#else
-#define EKNAN_M68K 0
-#endif
-
 // Detect legacy (pre-IEEE 754-2008) NaN encoding,
 // where the quiet bit is 0 in a quiet NaN.
 // Used by MIPS without NaN2008, and PA-RISC.
@@ -1045,23 +1039,12 @@ bool make_nan(F& out, bool quiet, payload_type<F> payload)
     return true;
 }
 
-// Whether the default NaNs have every payload bit set: with GCC on MIPS and
-// PA-RISC (legacy encoding), and on m68k. Clang uses the same bits as on other
-// platforms.
-#if !EKNAN_CLANG && (EKNAN_HAS_LEGACY_NAN_ENCODING || EKNAN_M68K)
-inline constexpr bool default_nan_payload_is_all_ones = true;
-#else
-inline constexpr bool default_nan_payload_is_all_ones = false;
-#endif
-
-// The payload of the default NaN, for types without both NaNs in
-// numeric_limits.
-// Matches the NaNs that GCC and Clang produce with __builtin_nan and
-// __builtin_nans. If default_nan_payload_is_all_ones is true,
-// the payload will (shockingly) have all its bits set.
-// Otherwise, the NaN with a quiet-bit field of 0
-// (signaling, except on legacy encodings)
-// has only the top payload bit set, and the other has payload 0.
+// The payload of the default NaN, the same on every platform:
+// 0 for the NaN with a quiet-bit field of 1 (quiet, except on legacy
+// encodings), and only the top payload bit set for the other one, for which
+// payload 0 would be an infinity.
+// This matches GCC's and Clang's __builtin_nan and __builtin_nans on most
+// IEEE 754-2008 targets (not with GCC on m68k).
 template <typename F>
 constexpr payload_type<F> default_payload(bool quiet)
 {
@@ -1069,45 +1052,15 @@ constexpr payload_type<F> default_payload(bool quiet)
     constexpr auto top_bit_index =
         static_cast<unsigned>(nan_repr_for<F>::payload_bits - 1);
     const auto top_bit = static_cast<T>(T{1} << static_cast<T>(top_bit_index));
-    if constexpr (default_nan_payload_is_all_ones) {
-        return static_cast<T>(top_bit | static_cast<T>(top_bit - T{1}));
-    }
-    else {
-        return zero_payload_is_infinity(quiet) ? top_bit : T{};
-    }
+    return zero_payload_is_infinity(quiet) ? top_bit : T{};
 }
-
-template <typename F>
-inline constexpr bool has_limits_nans =
-    std::numeric_limits<F>::is_specialized &&
-    std::numeric_limits<F>::has_quiet_NaN &&
-    std::numeric_limits<F>::has_signaling_NaN;
-
-template <typename F>
-inline constexpr F limits_quiet_nan = std::numeric_limits<F>::quiet_NaN();
-template <typename F>
-inline constexpr F limits_signaling_nan =
-    std::numeric_limits<F>::signaling_NaN();
 
 template <typename F>
 void make_default_nan(F& out, bool quiet)
 {
-    if constexpr (has_limits_nans<F>) {
-        std::memcpy(&out,
-                    quiet ? &limits_quiet_nan<F> : &limits_signaling_nan<F>,
-                    sizeof(F));
-        if (!quiet) {
-            // MSVC's numeric_limits<float>::signaling_NaN() is quiet
-            auto r = load_repr(out);
-            nan_fields(r).quiet_nan = quiet_bit_for(false) & 1u;
-            store_repr(out, r);
-        }
-    }
-    else {
-        static_assert(is_valid_payload<F>(default_payload<F>(true), true) &&
-                      is_valid_payload<F>(default_payload<F>(false), false));
-        write_nan(out, quiet, default_payload<F>(quiet));
-    }
+    static_assert(is_valid_payload<F>(default_payload<F>(true), true) &&
+                  is_valid_payload<F>(default_payload<F>(false), false));
+    write_nan(out, quiet, default_payload<F>(quiet));
 }
 
 template <typename F>
@@ -1240,12 +1193,36 @@ template <typename F,
 }
 
 /**
- * Sets `out` to the default quiet NaN, `std::numeric_limits<F>::quiet_NaN()`.
+ * Payload of the default quiet NaN, the one `make_qnan(out)` gives. The same on
+ * every platform: 0, or with the legacy NaN encoding (pre-2008 MIPS, PA-RISC),
+ * on which payload 0 would make an infinity, only the top payload bit set.
+ */
+template <typename F,
+          std::enable_if_t<detail::is_supported_float_type<F>>* = nullptr>
+[[nodiscard]] constexpr payload_type<F> get_default_qnan_payload() noexcept
+{
+    return detail::default_payload<F>(true);
+}
+
+/**
+ * Payload of the default signaling NaN, the one `make_snan(out)` gives. The
+ * same on every platform: only the top payload bit set, because payload 0 would
+ * make an infinity, or 0 with the legacy NaN encoding (pre-2008 MIPS,
+ * PA-RISC).
+ */
+template <typename F,
+          std::enable_if_t<detail::is_supported_float_type<F>>* = nullptr>
+[[nodiscard]] constexpr payload_type<F> get_default_snan_payload() noexcept
+{
+    return detail::default_payload<F>(false);
+}
+
+/**
+ * Sets `out` to the default quiet NaN: positive, with the payload
+ * `get_default_qnan_payload<F>()` and zero padding.
  *
- * If `std::numeric_limits<F>` doesn't provide both NaNs, sets it to a positive
- * quiet NaN with the payload that GCC's and Clang's `__builtin_nan` give: 0 on
- * most platforms, and all ones on MIPS and PA-RISC (the legacy NaN encoding)
- * and m68k.
+ * On most platforms, like x86 and ARM, this has the same bits as
+ * `std::numeric_limits<F>::quiet_NaN()` and `NAN`, but not on all of them.
  *
  * The `make_*` functions write into `out` instead of returning a value,
  * because returning a float or double on i386 quiets a signaling NaN.
@@ -1258,14 +1235,12 @@ void make_qnan(F& out) noexcept
 }
 
 /**
- * Sets `out` to the default signaling NaN,
- * `std::numeric_limits<F>::signaling_NaN()`. If that is actually quiet
- * (MSVC's `float`), its made to be a signaling NaN.
+ * Sets `out` to the default signaling NaN: positive, with the payload
+ * `get_default_snan_payload<F>()` and zero padding.
  *
- * If `std::numeric_limits<F>` doesn't provide both NaNs, sets it to a positive
- * signaling NaN with the payload that GCC's and Clang's `__builtin_nans` give:
- * only the top payload bit set on most platforms, and all ones on MIPS and
- * PA-RISC (the legacy NaN encoding) and m68k.
+ * On most platforms, like x86 and ARM, this has the same bits as
+ * `std::numeric_limits<F>::signaling_NaN()`, but not on all of them (MSVC's
+ * has payload 1).
  */
 template <typename F,
           std::enable_if_t<detail::is_supported_float_type<F>>* = nullptr>

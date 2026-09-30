@@ -57,12 +57,18 @@ add_library(eknan::eknan ALIAS eknan)
 
 if(EKNAN_COMPILER_RT)
     target_link_libraries(eknan INTERFACE
-            ${EKNAN_COMPIELR_RT_LIBRARY}
+            $<BUILD_INTERFACE:${EKNAN_COMPILER_RT_LIBRARY}>
     )
     target_compile_definitions(eknan INTERFACE
-            EKNAN_HAS_FLOAT16=1
-            EKNAN_HAS_BF16=1
+            $<BUILD_INTERFACE:EKNAN_HAS_FLOAT16=1>
     )
+    # On ARM64, Clang 17 and 18 crash when converting to __bf16
+    if(NOT CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64" OR
+       CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19)
+        target_compile_definitions(eknan INTERFACE
+                $<BUILD_INTERFACE:EKNAN_HAS_BF16=1>
+        )
+    endif()
 endif()
 
 target_include_directories(eknan INTERFACE

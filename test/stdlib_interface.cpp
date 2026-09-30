@@ -202,6 +202,10 @@ constexpr bool has_std_support =
 #endif
     ;
 
+template <typename T>
+constexpr bool is_double_double =
+    std::is_same_v<T, long double> && std::numeric_limits<T>::digits == 106;
+
 // Whether copysign may quiet a signaling NaN. On 32-bit x86, a float or double
 // returned by value goes through an x87 register. On m68k, copysign loads one
 // into an extended-precision register. Clang 18 on AArch64 converts a _Float16
@@ -290,6 +294,16 @@ void set_sign(T& value, bool negative)
 {
     if constexpr (copysign_may_quiet<T>) {
         set_sign_bit(value, negative);
+    }
+    else if constexpr (is_double_double<T>) {
+        // GCC 13's inline copysign for a double-double decides whether to
+        // negate the low double by comparing the high double with its absolute
+        // value, so for a high double of -0.0 it flips the sign of the low one
+        // when it shouldn't.
+        // Negating manually with the unary minus, which preserves the payload.
+        if (std::signbit(value) != negative) {
+            value = -value;
+        }
     }
     else if constexpr (has_std_support<T>) {
         value = std::copysign(value, static_cast<T>(negative ? -1.0 : 1.0));

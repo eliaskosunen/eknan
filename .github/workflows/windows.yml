@@ -87,7 +87,7 @@ jobs:
         run: |
           cmake -S . -B build -T ClangCL -A x64 \
                 -DEKNAN_WERROR=ON \
-                -DEKNAN_TEST_COMPILER_RT=${{ matrix.compiler-rt || 'OFF' }} \
+                -DEKNAN_COMPILER_RT=${{ matrix.compiler-rt || 'OFF' }} \
                 -DCMAKE_CXX_STANDARD=${{ matrix.std }}
 
       - name: Build

@@ -131,8 +131,8 @@ quiet bit, and double-double (a pair of `double`s) is a NaN if its high
 ## API overview
 
 All functions are in namespace `eknan`, take the value by reference, and are
-`noexcept`. Except for `get_payload_bit_count` and `get_padding_bit_count`,
-none of the functions are `constexpr`.
+`noexcept`. Only the `get_*_count` and `get_default_*_payload` functions are
+`constexpr`.
 Functions that can fail return a `[[nodiscard]] bool`, and leave the value
 unchanged on failure: for example, when the payload doesn't fit, or when the
 result would be an infinity instead of a NaN.
@@ -141,13 +141,22 @@ result would be an infinity instead of a NaN.
 |:--------------------------------------------------|:-------------------------------------------------------------------|
 | `is_nan(v)`                                       | Is `v` a NaN                                                       |
 | `is_quiet(v)`, `is_signaling(v)`                  | Is `v` a quiet/signaling NaN                                       |
-| `make_qnan(out)`, `make_snan(out)`                | Default quiet/signaling NaN                                        |
+| `make_qnan(out)`, `make_snan(out)`                | Default quiet/signaling NaN (see below)                            |
 | `make_qnan(out, payload)`, `make_snan(out, payload)` | Quiet/signaling NaN with a payload, as an integer or a string   |
 | `get_payload(v)`, `set_payload(v, payload)`       | Payload of a NaN                                                   |
 | `get_payload_bit_count<F>()`                      | Number of payload bits in `F`                                      |
+| `get_default_qnan_payload<F>()`, `get_default_snan_payload<F>()` | Payload of the default quiet/signaling NaN          |
 | `set_quiet(v)`, `set_signaling(v)`                | Change the quietness of a NaN, keeping its payload                 |
 | `get_signbit(v)`, `set_signbit(v, bit)`           | Sign bit, of any value                                             |
 | `get_padding(v)`, `set_padding(v, bits)`, `get_padding_bit_count<F>()` | Bits outside the value (x87 `long double` only) |
+
+The default NaNs are positive, and the same on every platform, rather than
+copies of `std::numeric_limits<F>` NaNs, which vary between compilers and
+standard libraries. The quiet NaN has payload 0, and the signaling NaN has only
+the top payload bit set, because payload 0 would make it an infinity.
+With the legacy NaN encoding (pre-2008 MIPS, PA-RISC), it's the other way
+around. On x86 and ARM, these have the same bits as `numeric_limits` NaNs
+(except for MSVC's signaling NaN, which has payload 1).
 
 Payload strings are decimal, hexadecimal (`0x`), or octal (`0`),
 with optional `_` digit separators.
@@ -201,8 +210,10 @@ With clang-cl, `_Float16` and `__bf16` support is off by default, because
 converting to or from them needs the compiler-rt builtins library, which
 clang-cl doesn't link automatically. To enable it, define `EKNAN_HAS_FLOAT16=1` and
 `EKNAN_HAS_BF16=1`, and link the library printed by
-`clang-cl /clang:--rtlib=compiler-rt /clang:-print-libgcc-file-name`. The tests
-do this with `-DEKNAN_TEST_COMPILER_RT=ON`.
+`clang-cl /clang:--rtlib=compiler-rt /clang:-print-libgcc-file-name`. With
+CMake, `-DEKNAN_COMPILER_RT=ON` does both for the `eknan::eknan` target in the
+build tree (not in the installed package), except for `__bf16` on ARM64
+before Clang 19.
 
 ## License
 
