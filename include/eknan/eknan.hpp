@@ -142,10 +142,19 @@
 #define EKNAN_GCC_HAS_FLOATN 0
 #endif
 
+// clang-cl doesn't link compiler-rt, which _Float16 and __bf16 conversions
+// need, so they're off there unless EKNAN_HAS_FLOAT16/EKNAN_HAS_BF16 are
+// predefined
+#if EKNAN_CLANG && defined(_MSC_VER)
+#define EKNAN_CLANG_CL 1
+#else
+#define EKNAN_CLANG_CL 0
+#endif
+
 // Whether Clang's __FLT16_* macros mean _Float16 is supported. On x86, Clang
 // supports _Float16 only since Clang 15, but older versions (for example,
 // Clang 8) define the macros there too.
-#if EKNAN_CLANG >= 15 || (EKNAN_CLANG && !EKNAN_X86)
+#if !EKNAN_CLANG_CL && (EKNAN_CLANG >= 15 || (EKNAN_CLANG && !EKNAN_X86))
 #define EKNAN_CLANG_HAS_FLOAT16 1
 #else
 #define EKNAN_CLANG_HAS_FLOAT16 0
@@ -155,7 +164,8 @@
 // by version and target. Clang 17 is the first version that can convert __bf16
 // to and from other types. Clang also has __bf16 on 32-bit ARM (only some
 // targets) and RISC-V (only newer versions), but those aren't detected.
-#if EKNAN_CLANG >= 17 && ((EKNAN_X86 && defined(__SSE2__)) || EKNAN_ARM64)
+#if !EKNAN_CLANG_CL && EKNAN_CLANG >= 17 && \
+    ((EKNAN_X86 && defined(__SSE2__)) || EKNAN_ARM64)
 #define EKNAN_CLANG_HAS_BF16 1
 #else
 #define EKNAN_CLANG_HAS_BF16 0
@@ -400,17 +410,16 @@ struct uint128_polyfill {
         const uint128_polyfill& a,
         const uint128_polyfill& b) noexcept
     {
+        uint128_polyfill result{};
         if (b.high || b.low >= 128) {
-            return {};
+            return result;
         }
 
         const auto shift = b.low;
         if (shift == 0) {
-            return a;
+            result = a;
         }
-
-        uint128_polyfill result{};
-        if (shift < 64) {
+        else if (shift < 64) {
             result.high = (a.high << shift) + (a.low >> (64 - shift));
             result.low = a.low << shift;
         }
@@ -432,17 +441,16 @@ struct uint128_polyfill {
         const uint128_polyfill& a,
         const uint128_polyfill& b) noexcept
     {
+        uint128_polyfill result{};
         if (b.high || b.low >= 128) {
-            return {};
+            return result;
         }
 
         const auto shift = b.low;
         if (shift == 0) {
-            return a;
+            result = a;
         }
-
-        uint128_polyfill result{};
-        if (shift < 64) {
+        else if (shift < 64) {
             result.high = a.high >> shift;
             result.low = (a.high << (64 - shift)) + (a.low >> shift);
         }
@@ -1061,6 +1069,12 @@ void make_default_nan(F& out, bool quiet)
         std::memcpy(&out,
                     quiet ? &limits_quiet_nan<F> : &limits_signaling_nan<F>,
                     sizeof(F));
+        if (!quiet) {
+            // MSVC's numeric_limits<float>::signaling_NaN() is quiet
+            auto r = load_repr(out);
+            nan_fields(r).quiet_nan = quiet_bit_for(false) & 1u;
+            store_repr(out, r);
+        }
     }
     else {
         static_assert(is_valid_payload<F>(default_payload<F>(true), true) &&
@@ -1218,7 +1232,8 @@ void make_qnan(F& out) noexcept
 
 /**
  * Sets `out` to the default signaling NaN,
- * `std::numeric_limits<F>::signaling_NaN()`.
+ * `std::numeric_limits<F>::signaling_NaN()`. If that is actually quiet
+ * (MSVC's `float`), its made to be a signaling NaN.
  *
  * If `std::numeric_limits<F>` doesn't provide both NaNs, sets it to a positive
  * signaling NaN with the payload that GCC's and Clang's `__builtin_nans` give:
@@ -1319,7 +1334,7 @@ template <typename F,
 void set_signbit(F& value, bool bit) noexcept
 {
     auto r = detail::load_repr(value);
-    if (detail::nan_fields(r).sign == bit) {
+    if (static_cast<bool>(detail::nan_fields(r).sign) == bit) {
         return;
     }
     detail::negate_repr(r);

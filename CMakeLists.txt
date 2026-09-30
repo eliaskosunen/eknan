@@ -28,14 +28,42 @@ endif()
 option(BUILD_TESTING "Build tests" ${EKNAN_IS_TOP_LEVEL})
 option(EKNAN_USE_EXTERNAL_GTEST "Use external GTest instead of FetchContent" OFF)
 option(EKNAN_WERROR "Treat warnings in the tests as errors" OFF)
+option(EKNAN_COMPILER_RT "clang-cl only: add compiler-rt as a linked library, to support _Float16 and __bf16" OFF)
 option(EKNAN_INSTALL "Generate install targets" ${EKNAN_IS_TOP_LEVEL})
 
 set(EKNAN_GTEST_VERSION "v1.15.2" CACHE STRING "GTest version to fetch")
+
+# _Float16 and __bf16 are off by default with clang-cl, because their
+# conversions need compiler-rt, which clang-cl doesn't link
+set(EKNAN_COMPILER_RT_LIBRARY)
+if(EKNAN_COMPILER_RT)
+    if(NOT (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
+        message(FATAL_ERROR "EKNAN_COMPILER_RT requires clang-cl")
+    endif()
+    execute_process(
+            COMMAND ${CMAKE_CXX_COMPILER} /clang:--rtlib=compiler-rt /clang:-print-libgcc-file-name
+            OUTPUT_VARIABLE EKNAN_COMPILER_RT_LIBRARY
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT EXISTS "${EKNAN_COMPILER_RT_LIBRARY}")
+        message(FATAL_ERROR "compiler-rt not found: '${EKNAN_COMPILER_RT_LIBRARY}'")
+    endif()
+endif()
 
 include(GNUInstallDirs)
 
 add_library(eknan INTERFACE)
 add_library(eknan::eknan ALIAS eknan)
+
+if(EKNAN_COMPILER_RT)
+    target_link_libraries(eknan INTERFACE
+            ${EKNAN_COMPIELR_RT_LIBRARY}
+    )
+    target_compile_definitions(eknan INTERFACE
+            EKNAN_HAS_FLOAT16=1
+            EKNAN_HAS_BF16=1
+    )
+endif()
 
 target_include_directories(eknan INTERFACE
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>

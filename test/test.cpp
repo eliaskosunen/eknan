@@ -152,9 +152,9 @@ std::vector<T> non_nan_values()
     using limits = finite_limits<T>;
 
     T inf{};
-    stdlib_interface::infinity(inf);
+    stdlib_interface::make_infinity(inf);
     T negative_inf{};
-    stdlib_interface::infinity(negative_inf);
+    stdlib_interface::make_infinity(negative_inf);
     stdlib_interface::set_sign(negative_inf, true);
     T negative_zero{};
     stdlib_interface::set_sign(negative_zero, true);
@@ -303,6 +303,13 @@ TYPED_TEST(MakeNanTest, Default)
 TYPED_TEST(MakeNanTest, DefaultPayloadMatchesPlatform)
 {
     for (const bool quiet : {true, false}) {
+#ifdef _MSVC_STL_VERSION
+        // The MSVC STL's signaling NaNs are __builtin_nans("1"), and
+        // default_payload models __builtin_nans("")
+        if (!quiet && eknan::detail::has_limits_nans<TypeParam>) {
+            continue;
+        }
+#endif
         SCOPED_TRACE(quietness_name(quiet));
         TypeParam value;
         ASSERT_TRUE(make_nan_of(
@@ -901,7 +908,7 @@ TEST(IsNanTest, X87PseudoNan)
 
     // A pseudo-infinity (integer bit 0, fraction 0) isn't
     long double pseudo_inf;
-    stdlib_interface::infinity(pseudo_inf);
+    stdlib_interface::make_infinity(pseudo_inf);
     clear_integer_bit(pseudo_inf);
     EXPECT_FALSE(eknan::is_nan(pseudo_inf));
 

@@ -39,6 +39,7 @@ jobs:
   # and the newest of each with the newest language standards
   ubuntu:
     runs-on: ubuntu-${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -86,13 +87,14 @@ jobs:
         run: cmake --build build --verbose -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --timeout 300 --test-dir build --output-on-failure
 
   # Oldest compilers we can get, through Docker.
   # These images have no working `apt` (Debian Stretch/9 and Buster/10 are past EOL),
   # so we bring our own cmake (the oldest one we claim to support) and ninja.
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -155,10 +157,11 @@ jobs:
         run: |
           export PATH=/usr/local/bin:$PATH
           cd build
-          ctest --output-on-failure
+          ctest --timeout 300 --output-on-failure
 
   libcxx:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -194,10 +197,11 @@ jobs:
         run: cmake --build build --verbose -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --timeout 300 --test-dir build --output-on-failure
 
   sanitizers:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -232,10 +236,11 @@ jobs:
         env:
           ASAN_OPTIONS: print_stacktrace=1
           UBSAN_OPTIONS: print_stacktrace=1
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --timeout 300 --test-dir build --output-on-failure
 
   special-flags:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -266,10 +271,11 @@ jobs:
         run: cmake --build build --verbose -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --timeout 300 --test-dir build --output-on-failure
 
   alpine:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -298,4 +304,4 @@ jobs:
         run: ./alpine-run.sh cmake --build build --verbose -- -k 0
 
       - name: Test
-        run: ./alpine-run.sh ctest --test-dir build --output-on-failure
+        run: ./alpine-run.sh ctest --timeout 300 --test-dir build --output-on-failure

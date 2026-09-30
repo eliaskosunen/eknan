@@ -157,6 +157,7 @@ function(eknan_add_test test_name)
         eknan::eknan
         GTest::gtest
         GTest::gtest_main
+        ${EKNAN_TEST_COMPILER_RT_LIBRARY}
     )
     target_compile_options(${test_name} PRIVATE ${EKNAN_WARNING_FLAGS})
     add_test(NAME ${test_name} COMMAND ${test_name})

@@ -39,7 +39,7 @@ template <typename T>
 void signaling_nan(T& out);
 
 template <typename T>
-void infinity(T& out);
+void make_infinity(T& out);
 
 // Applies X to every supported float type.
 // __float128 is left out if it's the same type as long double (GCC on
@@ -100,7 +100,7 @@ void infinity(T& out);
     prefix void set_sign<T>(T&, bool);                 \
     prefix void quiet_nan<T>(T&);                      \
     prefix void signaling_nan<T>(T&);                  \
-    prefix void infinity<T>(T&);
+    prefix void make_infinity<T>(T&);
 
 // Instantiated in stdlib_interface.cpp
 #define EKNAN_TEST_DECLARE_REFERENCE(T) \

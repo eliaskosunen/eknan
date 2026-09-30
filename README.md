@@ -98,10 +98,11 @@ quiet bit, and double-double (a pair of `double`s) is a NaN if its high
   x87 80-bit extended, IEEE binary128, and double-double), and these extended
   types, where the compiler provides them:
   * `_Float16`, `_Float32`, `_Float64`, `_Float128` (GCC 13+; `_Float16` also
-    in Clang), which are the C++23 `std::float16_t`, `std::float32_t`,
-    `std::float64_t`, and `std::float128_t`, but are also available in C++17
-  * `__bf16` (GCC 13+, and Clang 17+ on x86 and arm64), which is the C++23
-    `std::bfloat16_t`
+    in Clang, but not by default in clang-cl), which are the C++23
+    `std::float16_t`, `std::float32_t`, `std::float64_t`, and `std::float128_t`,
+    but are also available in C++17
+  * `__bf16` (GCC 13+, and Clang 17+ on x86 and arm64, but
+    not by default in clang-cl), which is the C++23 `std::bfloat16_t`
   * `__float128` (GCC and Clang)
   * A type is supported only if its format agrees with the expected binary
     layout (radix, digits, and maximum exponent), and it has quiet NaNs.
@@ -195,6 +196,13 @@ CI:
 * MinGW and MSYS2 (GCC and Clang)
 
 CMake 3.16 or newer is required, if using CMake.
+
+With clang-cl, `_Float16` and `__bf16` support is off by default, because
+converting to or from them needs the compiler-rt builtins library, which
+clang-cl doesn't link automatically. To enable it, define `EKNAN_HAS_FLOAT16=1` and
+`EKNAN_HAS_BF16=1`, and link the library printed by
+`clang-cl /clang:--rtlib=compiler-rt /clang:-print-libgcc-file-name`. The tests
+do this with `-DEKNAN_TEST_COMPILER_RT=ON`.
 
 ## License
 

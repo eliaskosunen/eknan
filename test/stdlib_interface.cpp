@@ -85,6 +85,24 @@ namespace stdlib_interface {
 template <typename T>
 struct builtins;
 
+// For when copysign would quiet a signaling NaN.
+// Only for IEEE formats, where the sign is the top bit.
+template <typename T>
+void set_sign_bit(T& value, bool negative)
+{
+    using bits_type = std::conditional_t<
+        sizeof(T) == 2, std::uint16_t,
+        std::conditional_t<sizeof(T) == 4, std::uint32_t, std::uint64_t>>;
+    static_assert(sizeof(bits_type) == sizeof(T));
+    constexpr auto sign =
+        static_cast<bits_type>(bits_type{1} << (sizeof(T) * 8 - 1));
+
+    bits_type bits;
+    std::memcpy(&bits, &value, sizeof(T));
+    bits = static_cast<bits_type>(negative ? bits | sign : bits & ~sign);
+    std::memcpy(&value, &bits, sizeof(T));
+}
+
 // Only defined where it's used, because of -Wunused-macros
 #if EKNAN_HAS_FLOAT16 || EKNAN_HAS_FLOAT32 || EKNAN_HAS_FLOAT64 || \
     EKNAN_HAS_FLOAT128 || EKNAN_TEST_HAS_GNU_FLOAT128
@@ -151,16 +169,6 @@ struct builtins<__bf16> {
     static constexpr auto quiet_nan = static_cast<__bf16>(__builtin_nanf(""));
     static constexpr auto signaling_nan = __builtin_nansf16b("");
 #endif
-
-    // No compiler has a copysign builtin for __bf16
-    static void set_sign(__bf16& value, bool negative)
-    {
-        std::uint16_t bits;
-        std::memcpy(&bits, &value, sizeof(value));
-        bits = static_cast<std::uint16_t>((bits & 0x7fffu) |
-                                          (negative ? 0x8000u : 0u));
-        std::memcpy(&value, &bits, sizeof(value));
-    }
 };
 #endif
 
@@ -189,9 +197,38 @@ constexpr bool has_std_support =
 #endif
     ;
 
+// Whether copysign may quiet a signaling NaN. On 32-bit MSVC, it returns in an
+// x87 register. On m68k, it loads a float or double into an extended-precision
+// register. No compiler has a copysign builtin for __bf16, and libstdc++'s
+// std::bfloat16_t overload converts to float.
+template <typename T>
+constexpr bool copysign_may_quiet =
+#if defined(_M_IX86)
+    true
+#elif defined(__m68k__)
+    sizeof(T) < sizeof(long double)
+#else
+    false
+#endif
+#if EKNAN_HAS_BF16
+    || std::is_same_v<T, __bf16>
+#endif
+    ;
+
 template <typename T>
 void copy_nan(T& out, bool quiet)
 {
+#if defined(_MSC_VER) && !defined(__clang__)
+    // MSVC's numeric_limits<float>::signaling_NaN() is quiet. This is the
+    // __builtin_nansf("1") that it's defined as.
+    if constexpr (std::is_same_v<T, float>) {
+        if (!quiet) {
+            constexpr std::uint32_t bits = 0x7f800001;
+            std::memcpy(&out, &bits, sizeof(T));
+            return;
+        }
+    }
+#endif
     if constexpr (has_std_support<T>) {
         static constexpr T quiet_value = std::numeric_limits<T>::quiet_NaN();
         static constexpr T signaling_value =
@@ -232,7 +269,10 @@ bool signbit(const T& value)
 template <typename T>
 void set_sign(T& value, bool negative)
 {
-    if constexpr (has_std_support<T>) {
+    if constexpr (copysign_may_quiet<T>) {
+        set_sign_bit(value, negative);
+    }
+    else if constexpr (has_std_support<T>) {
         value = std::copysign(value, static_cast<T>(negative ? -1.0 : 1.0));
     }
     else {
@@ -253,7 +293,7 @@ void signaling_nan(T& out)
 }
 
 template <typename T>
-void infinity(T& out)
+void make_infinity(T& out)
 {
     if constexpr (has_std_support<T>) {
         static constexpr T value = std::numeric_limits<T>::infinity();
