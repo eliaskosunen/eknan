@@ -62,6 +62,15 @@ endif()
 
 include(CheckCXXCompilerFlag)
 
+# googletest builds itself with -WX on clang-cl, and before v1.18.0, its
+# char8_t PrintTo triggers Clang 21's -Wcharacter-conversion in C++20 and later
+if(TARGET gtest)
+    check_cxx_compiler_flag(-Wcharacter-conversion EKNAN_HAS_FLAG_Wcharacter_conversion)
+    if(EKNAN_HAS_FLAG_Wcharacter_conversion)
+        target_compile_options(gtest PRIVATE -Wno-character-conversion)
+    endif()
+endif()
+
 # Almost every warning, except those that only restrict style (like
 # -Wtemplates), or are unusable with googletest (like -Wglobal-constructors).
 # Flags the compiler doesn't know are dropped.

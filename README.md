@@ -98,11 +98,11 @@ quiet bit, and double-double (a pair of `double`s) is a NaN if its high
   x87 80-bit extended, IEEE binary128, and double-double), and these extended
   types, where the compiler provides them:
   * `_Float16`, `_Float32`, `_Float64`, `_Float128` (GCC 13+; `_Float16` also
-    in Clang, but not by default in clang-cl), which are the C++23
-    `std::float16_t`, `std::float32_t`, `std::float64_t`, and `std::float128_t`,
-    but are also available in C++17
-  * `__bf16` (GCC 13+, and Clang 17+ on x86 and arm64, but
-    not by default in clang-cl), which is the C++23 `std::bfloat16_t`
+    in Clang, but not on 32-bit ARM, or by default in clang-cl), which are the
+    C++23 `std::float16_t`, `std::float32_t`, `std::float64_t`, and
+    `std::float128_t`, but are also available in C++17
+  * `__bf16` (GCC 13+, Clang 17+ on x86, and Clang 19+ or AppleClang 17+ on
+    arm64, but not by default in clang-cl), which is the C++23 `std::bfloat16_t`
   * `__float128` (GCC and Clang)
   * A type is supported only if its format agrees with the expected binary
     layout (radix, digits, and maximum exponent), and it has quiet NaNs.

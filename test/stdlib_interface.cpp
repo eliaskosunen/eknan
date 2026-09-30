@@ -176,6 +176,9 @@ namespace {
 
 // Whether <cmath> and numeric_limits support T. They support the extended
 // types only in C++23, so compiler builtins are used for them otherwise.
+// libstdc++ has <cmath> overloads for std::float128_t only where long double
+// is binary128 or libc has the f128 functions. Elsewhere (like macOS),
+// std::copysign resolves to its generic overload, which calls itself forever.
 template <typename T>
 constexpr bool has_std_support =
     std::is_same_v<T, float> || std::is_same_v<T, double> ||
@@ -189,7 +192,9 @@ constexpr bool has_std_support =
 #if defined(__STDCPP_FLOAT64_T__) && EKNAN_HAS_FLOAT64
     || std::is_same_v<T, _Float64>
 #endif
-#if defined(__STDCPP_FLOAT128_T__) && EKNAN_HAS_FLOAT128
+#if defined(__STDCPP_FLOAT128_T__) && EKNAN_HAS_FLOAT128 && \
+    (defined(_GLIBCXX_LDOUBLE_IS_IEEE_BINARY128) ||         \
+     defined(_GLIBCXX_HAVE_FLOAT128_MATH))
     || std::is_same_v<T, _Float128>
 #endif
 #if defined(__STDCPP_BFLOAT16_T__) && EKNAN_HAS_BF16
@@ -197,18 +202,20 @@ constexpr bool has_std_support =
 #endif
     ;
 
-// Whether copysign may quiet a signaling NaN. On 32-bit MSVC, it returns in an
-// x87 register. On m68k, it loads a float or double into an extended-precision
-// register. No compiler has a copysign builtin for __bf16, and libstdc++'s
-// std::bfloat16_t overload converts to float.
+// Whether copysign may quiet a signaling NaN. On 32-bit x86, a float or double
+// returned by value goes through an x87 register. On m68k, copysign loads one
+// into an extended-precision register. Clang 18 on AArch64 converts a _Float16
+// to float for __builtin_copysignf16. No compiler has a copysign builtin for
+// __bf16, and libstdc++'s std::bfloat16_t overload converts to float.
 template <typename T>
 constexpr bool copysign_may_quiet =
-#if defined(_M_IX86)
-    true
-#elif defined(__m68k__)
-    sizeof(T) < sizeof(long double)
+#if defined(__i386__) || defined(_M_IX86) || defined(__m68k__)
+    sizeof(T) <= sizeof(double)
 #else
     false
+#endif
+#if EKNAN_HAS_FLOAT16
+    || std::is_same_v<T, _Float16>
 #endif
 #if EKNAN_HAS_BF16
     || std::is_same_v<T, __bf16>
@@ -247,6 +254,18 @@ void copy_nan(T& out, bool quiet)
 template <typename T>
 bool isnan(const T& value)
 {
+#if EKNAN_HAS_BF16 && defined(__clang__)
+    // AppleClang 17's __builtin_isnan classifies a __bf16 as a _Float16, so
+    // this checks the float with the same top 16 bits instead
+    if constexpr (std::is_same_v<T, __bf16>) {
+        std::uint16_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        const auto float_bits = static_cast<std::uint32_t>(bits) << 16u;
+        float as_float;
+        std::memcpy(&as_float, &float_bits, sizeof(as_float));
+        return __builtin_isnan(as_float);
+    }
+#endif
     if constexpr (has_std_support<T>) {
         return std::isnan(value);
     }

@@ -103,6 +103,12 @@
 #define EKNAN_ARM64 0
 #endif
 
+#ifdef __arm__
+#define EKNAN_ARM32 1
+#else
+#define EKNAN_ARM32 0
+#endif
+
 #if defined(__mips__) || defined(__mips)
 #define EKNAN_MIPS 1
 #else
@@ -113,6 +119,12 @@
 #define EKNAN_HPPA 1
 #else
 #define EKNAN_HPPA 0
+#endif
+
+#if defined(__m68k__) || defined(__mc68000__)
+#define EKNAN_M68K 1
+#else
+#define EKNAN_M68K 0
 #endif
 
 // Detect legacy (pre-IEEE 754-2008) NaN encoding,
@@ -151,22 +163,33 @@
 #define EKNAN_CLANG_CL 0
 #endif
 
-// Whether Clang's __FLT16_* macros mean _Float16 is supported. On x86, Clang
-// supports _Float16 only since Clang 15, but older versions (for example,
-// Clang 8) define the macros there too.
-#if !EKNAN_CLANG_CL && (EKNAN_CLANG >= 15 || (EKNAN_CLANG && !EKNAN_X86))
-#define EKNAN_CLANG_HAS_FLOAT16 1
-#else
+// Whether Clang's __FLT16_* macros mean _Float16 is supported
+#if !EKNAN_CLANG || EKNAN_CLANG_CL
 #define EKNAN_CLANG_HAS_FLOAT16 0
+#elif EKNAN_ARM32
+// The conversions need __aeabi_d2h, which libgcc doesn't have
+#define EKNAN_CLANG_HAS_FLOAT16 0
+#elif EKNAN_X86
+// Supported since Clang 15, but older versions (like Clang 8) define the macros
+#define EKNAN_CLANG_HAS_FLOAT16 (EKNAN_CLANG >= 15)
+#else
+#define EKNAN_CLANG_HAS_FLOAT16 1
 #endif
 
 // Whether Clang supports __bf16. Clang has no __BFLT16_* macros, so this goes
 // by version and target. Clang 17 is the first version that can convert __bf16
 // to and from other types. Clang also has __bf16 on 32-bit ARM (only some
 // targets) and RISC-V (only newer versions), but those aren't detected.
-#if !EKNAN_CLANG_CL && EKNAN_CLANG >= 17 && \
-    ((EKNAN_X86 && defined(__SSE2__)) || EKNAN_ARM64)
-#define EKNAN_CLANG_HAS_BF16 1
+#if !EKNAN_CLANG || EKNAN_CLANG_CL
+#define EKNAN_CLANG_HAS_BF16 0
+#elif EKNAN_X86 && defined(__SSE2__)
+#define EKNAN_CLANG_HAS_BF16 (EKNAN_CLANG >= 17)
+#elif EKNAN_ARM64 && defined(__apple_build_version__)
+// AppleClang 17 is LLVM 19
+#define EKNAN_CLANG_HAS_BF16 (EKNAN_CLANG >= 17)
+#elif EKNAN_ARM64
+// Clang 17 and 18 crash when converting to __bf16
+#define EKNAN_CLANG_HAS_BF16 (EKNAN_CLANG >= 19)
 #else
 #define EKNAN_CLANG_HAS_BF16 0
 #endif
@@ -1022,9 +1045,10 @@ bool make_nan(F& out, bool quiet, payload_type<F> payload)
     return true;
 }
 
-// Whether the default NaNs have every payload bit set:
-// MIPS and PA-RISC (legacy encoding), and m68k
-#if EKNAN_HAS_LEGACY_NAN_ENCODING || defined(__m68k__) || defined(__mc68000__)
+// Whether the default NaNs have every payload bit set: with GCC on MIPS and
+// PA-RISC (legacy encoding), and on m68k. Clang uses the same bits as on other
+// platforms.
+#if !EKNAN_CLANG && (EKNAN_HAS_LEGACY_NAN_ENCODING || EKNAN_M68K)
 inline constexpr bool default_nan_payload_is_all_ones = true;
 #else
 inline constexpr bool default_nan_payload_is_all_ones = false;
@@ -1033,8 +1057,11 @@ inline constexpr bool default_nan_payload_is_all_ones = false;
 // The payload of the default NaN, for types without both NaNs in
 // numeric_limits.
 // Matches the NaNs that GCC and Clang produce with __builtin_nan and
-// __builtin_nans. On most platforms, a quiet NaN has payload 0, and a signaling
-// NaN has only the top payload bit set.
+// __builtin_nans. If default_nan_payload_is_all_ones is true,
+// the payload will (shockingly) have all its bits set.
+// Otherwise, the NaN with a quiet-bit field of 0
+// (signaling, except on legacy encodings)
+// has only the top payload bit set, and the other has payload 0.
 template <typename F>
 constexpr payload_type<F> default_payload(bool quiet)
 {
@@ -1046,7 +1073,7 @@ constexpr payload_type<F> default_payload(bool quiet)
         return static_cast<T>(top_bit | static_cast<T>(top_bit - T{1}));
     }
     else {
-        return quiet ? T{} : top_bit;
+        return zero_payload_is_infinity(quiet) ? top_bit : T{};
     }
 }
 
